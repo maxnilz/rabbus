@@ -123,6 +123,8 @@ type (
 		EmitErr() <-chan error
 		// EmitOk returns true when the message was sent.
 		EmitOk() <-chan struct{}
+		// EmitSync emits a message to RabbitMQ and wait the response from broker.
+		EmitSync(msg *Message) error
 	}
 
 	config struct {
@@ -383,7 +385,7 @@ func (r *Rabbus) Run(ctx context.Context) error {
 				return errors.New("unexpected close of emit channel")
 			}
 
-			r.produce(m)
+			r.produceAsync(m)
 
 		case err := <-notifyClose:
 			if err == nil {
@@ -410,6 +412,11 @@ func (r *Rabbus) EmitErr() <-chan error { return r.emitErr }
 
 // EmitOk returns true when the message was sent.
 func (r *Rabbus) EmitOk() <-chan struct{} { return r.emitOk }
+
+// EmitSync emits a message to RabbitMQ and wait the response from broker.
+func (r *Rabbus) EmitSync(msg *Message) error {
+	return r.produce(msg)
+}
 
 // Listen to a message from RabbitMQ, returns
 // an error if exchange, queue name and function handler not passed or if an error occurred while creating
@@ -455,7 +462,47 @@ func (r *Rabbus) Close() error {
 	return err
 }
 
-func (r *Rabbus) produce(m Message) {
+func (r *Rabbus) produce(m *Message) error {
+	if _, ok := r.exDeclared[m.Exchange]; !ok {
+		if err := r.WithExchange(m.Exchange, m.Kind, r.config.durable); err != nil {
+			return err
+		}
+		r.exDeclared[m.Exchange] = struct{}{}
+	}
+
+	if m.ContentType == "" {
+		m.ContentType = ContentTypeJSON
+	}
+
+	if m.DeliveryMode == 0 {
+		m.DeliveryMode = Persistent
+	}
+
+	if m.ContentEncoding == "" {
+		m.ContentEncoding = contentEncoding
+	}
+
+	opts := amqp.Publishing{
+		Headers:         amqp.Table(m.Headers),
+		ContentType:     m.ContentType,
+		ContentEncoding: m.ContentEncoding,
+		DeliveryMode:    m.DeliveryMode,
+		Timestamp:       time.Now(),
+		Body:            m.Payload,
+	}
+
+	if _, err := r.breaker.Execute(func() (interface{}, error) {
+		return nil, retry.Do(func() error {
+			return r.Publish(m.Exchange, m.Key, opts)
+		}, r.config.retryCfg.attempts, r.config.retryCfg.sleep)
+	}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *Rabbus) produceAsync(m Message) {
 	if _, ok := r.exDeclared[m.Exchange]; !ok {
 		if err := r.WithExchange(m.Exchange, m.Kind, r.config.durable); err != nil {
 			r.emitErr <- err
