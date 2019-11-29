@@ -141,12 +141,6 @@ func main() {
 
 ## Badges
 
-[![Build Status](https://circleci.com/gh/rafaeljesus/rabbus.svg?style=svg)](https://circleci.com/gh/rafaeljesus/rabbus)
 [![Go Report Card](https://goreportcard.com/badge/github.com/maxnilz/rabbus)](https://goreportcard.com/report/github.com/maxnilz/rabbus)
 [![Go Doc](https://godoc.org/github.com/maxnilz/rabbus?status.svg)](https://godoc.org/github.com/maxnilz/rabbus)
 
----
-
-> GitHub [@rafaeljesus](https://github.com/rafaeljesus) &nbsp;&middot;&nbsp;
-> Medium [@_jesus_rafael](https://medium.com/@_jesus_rafael) &nbsp;&middot;&nbsp;
-> Twitter [@_jesus_rafael](https://twitter.com/_jesus_rafael)
