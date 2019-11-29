@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rafaeljesus/rabbus"
+	"github.com/maxnilz/rabbus"
 )
 
 const (

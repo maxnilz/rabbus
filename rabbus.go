@@ -3,12 +3,13 @@ package rabbus
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
-	amqpWrap "github.com/rafaeljesus/rabbus/internal/amqp"
+	amqpWrap "github.com/maxnilz/rabbus/internal/amqp"
 
-	"github.com/rafaeljesus/retry-go"
+	"github.com/maxnilz/rabbus/pkg/retry"
 	"github.com/sony/gobreaker"
 	"github.com/streadway/amqp"
 )
@@ -85,6 +86,7 @@ type (
 	Rabbus struct {
 		AMQP
 		mu         sync.RWMutex
+		m          map[string]muxEntry
 		breaker    *gobreaker.CircuitBreaker
 		emit       chan Message
 		emitErr    chan error
@@ -93,6 +95,8 @@ type (
 		exDeclared map[string]struct{}
 		config
 		conDeclared int // conDeclared is a counter for the declared consumers
+
+		closed chan struct{}
 	}
 
 	// AMQP exposes a interface for interacting with AMQP broker
@@ -173,6 +177,7 @@ func New(dsn string, options ...Option) (*Rabbus, error) {
 		emitOk:     make(chan struct{}),
 		reconn:     make(chan struct{}),
 		exDeclared: make(map[string]struct{}),
+		closed:     make(chan struct{}),
 	}
 
 	for _, o := range options {
@@ -201,6 +206,169 @@ func New(dsn string, options ...Option) (*Rabbus, error) {
 	r.breaker = gobreaker.NewCircuitBreaker(newBreakerSettings(r.config))
 
 	return r, nil
+}
+
+// The HandlerFunc type is an adapter to allow the use of
+// ordinary functions as RabbitMQ bus handlers. If f is a function
+// with the appropriate signature, HandlerFunc(f) is a
+// Handler that calls f.
+type HandlerFunc func(ctx context.Context, message ConsumerMessage)
+
+// ServeConsumerMessage calls f(w, r).
+func (f HandlerFunc) ServeConsumerMessage(ctx context.Context, message ConsumerMessage) {
+	f(ctx, message)
+}
+
+type Handler interface {
+	ServeConsumerMessage(ctx context.Context, message ConsumerMessage)
+}
+
+type muxEntry struct {
+	h Handler
+	c ListenConfig
+}
+
+// HandleFunc registers the handler function for the given q.
+func (r *Rabbus) HandleFunc(c ListenConfig, handler func(ctx context.Context, message ConsumerMessage)) {
+	if handler == nil {
+		panic(ErrMissingHandler)
+	}
+	r.Handle(c, HandlerFunc(handler))
+}
+
+// Handle registers the handler for the given q.
+// If a handler already exists for q, Handle panics.
+func (r *Rabbus) Handle(c ListenConfig, handler Handler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := c.validate(); err != nil {
+		panic(err)
+	}
+	if handler == nil {
+		panic(ErrMissingHandler)
+	}
+
+	if _, exist := r.m[c.Queue]; exist {
+		panic(errors.New("multiple registrations for " + c.Queue))
+	}
+
+	if r.m == nil {
+		r.m = make(map[string]muxEntry)
+	}
+	e := muxEntry{h: handler, c: c}
+	r.m[c.Queue] = e
+}
+
+func (r *Rabbus) ListenAndServe(ctx context.Context) error {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(context.Background())
+		defer cancel()
+	}
+
+	errchan := make(chan error)
+	for _, entry := range r.m {
+		go func(c ListenConfig) {
+
+			errchan <- r.listenAndServe(ctx, c)
+
+		}(entry.c)
+	}
+
+	var errs []error
+	for i := 0; i < len(r.m); i++ {
+		select {
+		case err := <-errchan:
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	if len(errs) != 0 {
+		var es []string
+		for _, err := range errs {
+			es = append(es, err.Error())
+		}
+		return errors.New(strings.Join(es, "\n"))
+	}
+
+	return nil
+}
+
+// NotFound record an error for the not founded handler.
+func NotFound(_ context.Context, message ConsumerMessage) {
+	// TODO record an error for the not founded handler
+}
+
+// NotFoundHandler returns a simple not found handler.
+func NotFoundHandler() Handler { return HandlerFunc(NotFound) }
+
+// ServeConsumerMessage dispatches the message to the handler whose
+// q most closely matches the message's routing key.
+func (r *Rabbus) ServeConsumerMessage(ctx context.Context, q ListenConfig, message ConsumerMessage) {
+	h, _ := r.handler(q)
+	if h == nil {
+		h = NotFoundHandler()
+	}
+	h.ServeConsumerMessage(ctx, message)
+}
+
+// Find a handler on a handler map given a queue.
+func (r *Rabbus) match(q ListenConfig) (h Handler, queue ListenConfig) {
+	// Check for exact match first.
+	v, ok := r.m[q.Queue]
+	if ok {
+		return v.h, v.c
+	}
+
+	return nil, q
+}
+
+func (r *Rabbus) handler(q ListenConfig) (h Handler, queue ListenConfig) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.match(q)
+}
+
+func (r *Rabbus) listenAndServe(ctx context.Context, c ListenConfig) error {
+	if c.DeclareArgs == nil {
+		c.DeclareArgs = NewDeclareArgs()
+	}
+
+	if c.BindArgs == nil {
+		c.BindArgs = NewBindArgs()
+	}
+
+	msgs, err := r.CreateConsumer(c.Exchange, c.Key, c.Kind, c.Queue, r.config.durable, c.DeclareArgs.args, c.BindArgs.args)
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	r.conDeclared++ // increase the declared consumers counter
+	r.exDeclared[c.Exchange] = struct{}{}
+	r.mu.Unlock()
+
+	messages := make(chan ConsumerMessage, 256)
+	go r.wrapMessage(c, msgs, messages)
+	go r.listenReconnect(c, messages)
+
+	for {
+		select {
+		case m, ok := <-messages:
+			if !ok {
+				return nil
+			}
+			r.ServeConsumerMessage(ctx, c, m)
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.closed:
+			return nil
+		}
+	}
 }
 
 // Run starts rabbus channels for emitting and listening for amqp connection close
@@ -283,6 +451,7 @@ func (r *Rabbus) Close() error {
 	close(r.emitOk)
 	close(r.emitErr)
 	close(r.reconn)
+	close(r.closed)
 	return err
 }
 

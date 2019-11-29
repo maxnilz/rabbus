@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/maxnilz/rabbus"
@@ -11,6 +12,7 @@ import (
 var (
 	rabbusDsn = "amqp://localhost:5672"
 	timeout   = time.After(time.Second * 3)
+	wg        sync.WaitGroup
 )
 
 func main() {
@@ -41,28 +43,18 @@ func main() {
 
 	go r.Run(ctx)
 
-	msg := rabbus.Message{
-		Exchange:     "producer_test_ex",
-		Kind:         "direct",
-		Key:          "producer_test_key",
-		Payload:      []byte(`foo`),
-		DeliveryMode: rabbus.Persistent,
-	}
+	r.HandleFunc(rabbus.ListenConfig{
+		Exchange:        "consumer_test_ex",
+		Kind:            "direct",
+		Key:             "consumer_test_key",
+		PassiveExchange: false,
+		Queue:           "consumer_test_q",
+		DeclareArgs:     nil,
+		BindArgs:        nil,
+	}, func(ctx context.Context, message rabbus.ConsumerMessage) {
+		log.Println("Message was consumed")
+		message.Ack(false)
+	})
 
-	r.EmitAsync() <- msg
-
-outer:
-	for {
-		select {
-		case <-r.EmitOk():
-			log.Println("Message was sent")
-			break outer
-		case err := <-r.EmitErr():
-			log.Fatalf("Failed to send message %s", err)
-			break outer
-		case <-timeout:
-			log.Println("got time out error")
-			break outer
-		}
-	}
+	r.ListenAndServe(ctx)
 }

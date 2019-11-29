@@ -8,7 +8,7 @@
 
 ## Installation
 ```bash
-go get -u github.com/rafaeljesus/rabbus
+go get -u github.com/maxnilz/rabbus
 ```
 
 ## Usage
@@ -20,7 +20,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/rafaeljesus/rabbus"
+	"github.com/maxnilz/rabbus"
 )
 
 func main() {
@@ -80,7 +80,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/rafaeljesus/rabbus"
+	"github.com/maxnilz/rabbus"
 )
 
 func main() {
@@ -142,8 +142,8 @@ func main() {
 ## Badges
 
 [![Build Status](https://circleci.com/gh/rafaeljesus/rabbus.svg?style=svg)](https://circleci.com/gh/rafaeljesus/rabbus)
-[![Go Report Card](https://goreportcard.com/badge/github.com/rafaeljesus/rabbus)](https://goreportcard.com/report/github.com/rafaeljesus/rabbus)
-[![Go Doc](https://godoc.org/github.com/rafaeljesus/rabbus?status.svg)](https://godoc.org/github.com/rafaeljesus/rabbus)
+[![Go Report Card](https://goreportcard.com/badge/github.com/maxnilz/rabbus)](https://goreportcard.com/report/github.com/maxnilz/rabbus)
+[![Go Doc](https://godoc.org/github.com/maxnilz/rabbus?status.svg)](https://godoc.org/github.com/maxnilz/rabbus)
 
 ---
 

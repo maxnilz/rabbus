@@ -1,10 +1,6 @@
 .PHONY: all deps test integration-test-ci
 
-all: deps test integration-test
-
-deps:
-	@go get -u github.com/golang/dep/cmd/dep
-	@dep ensure -v -vendor-only
+all: test integration-test
 
 test:
 	@go test -v -race -cover
