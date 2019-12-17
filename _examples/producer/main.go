@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"time"
 
@@ -10,10 +11,15 @@ import (
 
 var (
 	rabbusDsn = "amqp://localhost:5672"
-	timeout   = time.After(time.Second * 3)
 )
 
 func main() {
+	exchange := flag.String("ex", "producer_test_ex", "exchange name")
+	kind := flag.String("kind", "direct", "kind")
+	key := flag.String("routing-key", "producer_test_key", "routing key")
+	payload := flag.String("payload", "foo", "payload")
+	flag.Parse()
+
 	cbStateChangeFunc := func(name, from, to string) {
 		// do something when state is changed
 	}
@@ -42,27 +48,14 @@ func main() {
 	go r.Run(ctx)
 
 	msg := rabbus.Message{
-		Exchange:     "producer_test_ex",
-		Kind:         "direct",
-		Key:          "producer_test_key",
-		Payload:      []byte(`foo`),
+		Exchange:     *exchange,
+		Kind:         *kind,
+		Key:          *key,
+		Payload:      []byte(*payload),
 		DeliveryMode: rabbus.Persistent,
 	}
 
-	r.EmitAsync() <- msg
-
-outer:
-	for {
-		select {
-		case <-r.EmitOk():
-			log.Println("Message was sent")
-			break outer
-		case err := <-r.EmitErr():
-			log.Fatalf("Failed to send message %s", err)
-			break outer
-		case <-timeout:
-			log.Println("got time out error")
-			break outer
-		}
+	if err := r.EmitSync(&msg); err != nil {
+		log.Fatalln(err)
 	}
 }

@@ -131,6 +131,9 @@ type (
 		dsn               string
 		durable           bool
 		isExchangePassive bool
+		// The size of channel pools,
+		// If the size zero or less than zero, use the default configuration of underlying layer.
+		chPoolSize int
 		retryCfg
 		breaker
 		qos
@@ -189,7 +192,7 @@ func New(dsn string, options ...Option) (*Rabbus, error) {
 	}
 
 	if r.AMQP == nil {
-		amqpWrapper, err := amqpWrap.New(dsn, r.config.isExchangePassive)
+		amqpWrapper, err := amqpWrap.New(dsn, r.config.isExchangePassive, r.config.chPoolSize)
 		if err != nil {
 			return nil, err
 		}
@@ -553,7 +556,7 @@ func (r *Rabbus) wrapMessage(c ListenConfig, sourceChan <-chan amqp.Delivery, ta
 func (r *Rabbus) handleAMQPClose(err error) {
 	for {
 		time.Sleep(time.Second)
-		aw, err := amqpWrap.New(r.config.dsn, r.config.isExchangePassive)
+		aw, err := amqpWrap.New(r.config.dsn, r.config.isExchangePassive, r.config.chPoolSize)
 		if err != nil {
 			continue
 		}

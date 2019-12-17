@@ -113,6 +113,13 @@ func OnStateChange(fn OnStateChangeFunc) Option {
 	}
 }
 
+func ChannelPoolSize(poolSize int) Option {
+	return func(r *Rabbus) error {
+		r.config.chPoolSize = poolSize
+		return nil
+	}
+}
+
 // AMQPProvider expose a interface for interacting with amqp broker
 func AMQPProvider(provider AMQP) Option {
 	return func(r *Rabbus) error {
