@@ -7,7 +7,7 @@ import (
 	"github.com/streadway/amqp"
 )
 
-// a classic thread-safe queue in lock contention
+// queue a classic thread-safe queue in lock contention
 type queue struct {
 	sync.Mutex
 	items []*amqp.Channel

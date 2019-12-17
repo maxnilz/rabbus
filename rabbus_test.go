@@ -1,7 +1,6 @@
 package rabbus
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -261,11 +260,6 @@ func testEmitAsyncMessage(t *testing.T) {
 		}
 	}(r)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go r.Run(ctx)
-
 	r.EmitAsync() <- msg
 
 outer:
@@ -308,11 +302,6 @@ func testEmitAsyncMessageFailToDeclareExchange(t *testing.T) {
 		}
 	}(r)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go r.Run(ctx)
-
 	r.EmitAsync() <- msg
 outer:
 	for {
@@ -353,11 +342,6 @@ func testEmitAsyncMessageFailToPublish(t *testing.T) {
 			t.Errorf("expected to close rabbus %s", err)
 		}
 	}(r)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go r.Run(ctx)
 
 	r.EmitAsync() <- msg
 
@@ -400,11 +384,6 @@ func testEmitAsyncMessageEnsureBreaker(t *testing.T) {
 			t.Errorf("expected to close rabbus %s", err)
 		}
 	}(r)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go r.Run(ctx)
 
 	r.EmitAsync() <- msg
 

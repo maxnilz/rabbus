@@ -56,6 +56,7 @@ func QosGlobal(global bool) Option {
 }
 
 // Attempts is the max number of retries on broker outages.
+// Used for sending a message async.
 func Attempts(attempts int) Option {
 	return func(r *Rabbus) error {
 		r.config.retryCfg.attempts = attempts
@@ -64,6 +65,7 @@ func Attempts(attempts int) Option {
 }
 
 // Sleep is the sleep time of the retry mechanism.
+// Used for sending a message async.
 func Sleep(sleep time.Duration) Option {
 	return func(r *Rabbus) error {
 		if sleep == 0 {
@@ -76,6 +78,7 @@ func Sleep(sleep time.Duration) Option {
 
 // BreakerInterval is the cyclic period of the closed state for CircuitBreaker to clear the internal counts,
 // If Interval is 0, CircuitBreaker doesn't clear the internal counts during the closed state.
+// Used for sending a message async.
 func BreakerInterval(interval time.Duration) Option {
 	return func(r *Rabbus) error {
 		r.config.breaker.interval = interval
@@ -85,6 +88,7 @@ func BreakerInterval(interval time.Duration) Option {
 
 // BreakerTimeout is the period of the open state, after which the state of CircuitBreaker becomes half-open.
 // If Timeout is 0, the timeout value of CircuitBreaker is set to 60 seconds.
+// Used for sending a message async.
 func BreakerTimeout(timeout time.Duration) Option {
 	return func(r *Rabbus) error {
 		r.config.breaker.timeout = timeout
@@ -95,6 +99,7 @@ func BreakerTimeout(timeout time.Duration) Option {
 // Threshold when a threshold of failures has been reached, future calls to the broker will not run.
 // During this state, the circuit breaker will periodically allow the calls to run and, if it is successful,
 // will start running the function again. Default value is 5.
+// Used for sending a message async.
 func Threshold(threshold uint32) Option {
 	return func(r *Rabbus) error {
 		if threshold == 0 {
@@ -106,6 +111,7 @@ func Threshold(threshold uint32) Option {
 }
 
 // OnStateChange is called whenever the state of CircuitBreaker changes.
+// Used for sending a message async.
 func OnStateChange(fn OnStateChangeFunc) Option {
 	return func(r *Rabbus) error {
 		r.config.breaker.onStateChange = fn
@@ -113,9 +119,18 @@ func OnStateChange(fn OnStateChangeFunc) Option {
 	}
 }
 
+// ChannelPoolSize indicate the underlying broker to create how many channel for the message delivery.
 func ChannelPoolSize(poolSize int) Option {
 	return func(r *Rabbus) error {
 		r.config.chPoolSize = poolSize
+		return nil
+	}
+}
+
+// WithLogger setup external logger to log the internal details.
+func WithLogger(logger Logger) Option {
+	return func(r *Rabbus) error {
+		r.Logger = logger
 		return nil
 	}
 }

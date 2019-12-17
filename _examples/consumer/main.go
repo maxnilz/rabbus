@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"log"
-	"sync"
 	"time"
 
 	"github.com/maxnilz/rabbus"
@@ -11,8 +9,6 @@ import (
 
 var (
 	rabbusDsn = "amqp://localhost:5672"
-	timeout   = time.After(time.Second * 3)
-	wg        sync.WaitGroup
 )
 
 func main() {
@@ -37,11 +33,6 @@ func main() {
 			log.Fatalf("Failed to close rabbus connection %s", err)
 		}
 	}(r)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go r.Run(ctx)
 
 	messages, err := r.Listen(rabbus.ListenConfig{
 		Exchange: "consumer_test_ex",

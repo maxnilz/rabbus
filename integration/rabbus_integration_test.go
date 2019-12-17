@@ -1,7 +1,6 @@
 package rabbus
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -88,11 +87,6 @@ func testRabbusPublishSubscribe(t *testing.T) {
 		}
 	}(r)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go r.Run(ctx)
-
 	messages, err := r.Listen(rabbus.ListenConfig{
 		Exchange: "test_ex",
 		Kind:     rabbus.ExchangeDirect,
@@ -156,11 +150,6 @@ func benchmarkEmitAsync(b *testing.B) {
 		}
 	}(r)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go r.Run(ctx)
-
 	var wg sync.WaitGroup
 	wg.Add(b.N)
 
@@ -217,11 +206,6 @@ func TestPublishDisconnect(t *testing.T) {
 			t.Errorf("expected to close rabbus %s", err)
 		}
 	}(r)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go r.Run(ctx)
 
 	msg := rabbus.Message{
 		Exchange:     "test_ex_kill",

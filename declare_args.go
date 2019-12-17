@@ -8,6 +8,7 @@ import (
 
 const (
 	messageTTL = "x-message-ttl"
+	maxLength  = "x-max-length"
 )
 
 // DeclareArgs is the queue declaration values builder
@@ -24,6 +25,11 @@ func NewDeclareArgs() *DeclareArgs {
 func (a *DeclareArgs) WithMessageTTL(d time.Duration) *DeclareArgs {
 	// RabbitMQ requires time in milliseconds and duration is in Nanosecond
 	return a.With(messageTTL, int64(d/time.Millisecond))
+}
+
+// WithMaxLength sets max queue length, See details at https://www.rabbitmq.com/maxlength.html#definition-using-x-args
+func (a *DeclareArgs) WithMaxLength(length int) *DeclareArgs {
+	return a.With(maxLength, length)
 }
 
 // With sets the value by name

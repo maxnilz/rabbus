@@ -1,8 +1,10 @@
 ## Rabbus 🚌 ✨
 
 * A tiny wrapper over [amqp](https://github.com/streadway/amqp) exchanges and queues.
-* In memory retries with exponential backoff for sending messages.
-* Protect producer calls with [circuit breaker](https://github.com/sony/gobreaker).
+* Support listen & serve multiple consumer at same via register handler function.
+* Support produce message in both sync & async way mode.
+* In memory retries with exponential backoff for sending messages for async producing mode.
+* Protect async producer calls with [circuit breaker](https://github.com/sony/gobreaker) for async producing mode.
 * Automatic reconnect to RabbitMQ broker when connection is lost.
 * Go channel API.
 
@@ -14,121 +16,131 @@ go get -u github.com/maxnilz/rabbus
 ## Usage
 The rabbus package exposes an interface for emitting and listening RabbitMQ messages.
 
-### Emit
+### Emit in sync mode
 ```go
+package main
+
 import (
-	"context"
-	"time"
+	"flag"
+	"log"
+	"runtime"
 
 	"github.com/maxnilz/rabbus"
+	"github.com/sirupsen/logrus"
+)
+
+var (
+	rabbusDsn = "amqp://localhost:5672"
 )
 
 func main() {
-	timeout := time.After(time.Second * 3)
-	cbStateChangeFunc := func(name, from, to string) {
-		// do something when state is changed
-	}
+	exchange := flag.String("ex", "producer_test_ex", "exchange name")
+	kind := flag.String("kind", "direct", "kind")
+	key := flag.String("routing-key", "producer_test_key", "routing key")
+	payload := flag.String("payload", "foo", "payload")
+	flag.Parse()
+
 	r, err := rabbus.New(
 		rabbusDsn,
 		rabbus.Durable(true),
-		rabbus.Attempts(5),
-		rabbus.Sleep(time.Second*2),
-		rabbus.Threshold(3),
-		rabbus.OnStateChange(cbStateChangeFunc),
+		rabbus.WithLogger(logrus.StandardLogger()),
+		rabbus.ChannelPoolSize(runtime.NumCPU()*5),
 	)
 	if err != nil {
-		// handle error
+		log.Fatalf("Failed to init rabbus connection %s", err)
+		return
 	}
 
-	defer func(r Rabbus) {
+	defer func(r *rabbus.Rabbus) {
 		if err := r.Close(); err != nil {
-			// handle error
+			log.Fatalf("Failed to close rabbus connection %s", err)
 		}
 	}(r)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go r.Run(ctx)
-
 	msg := rabbus.Message{
-		Exchange: "test_ex",
-		Kind:     "topic",
-		Key:      "test_key",
-		Payload:  []byte(`foo`),
+		Exchange:     *exchange,
+		Kind:         *kind,
+		Key:          *key,
+		Payload:      []byte(*payload),
+		DeliveryMode: rabbus.Persistent,
 	}
 
-	r.EmitAsync() <- msg
-
-	for {
-		select {
-		case <-r.EmitOk():
-			// message was sent
-		case <-r.EmitErr():
-			// failed to send message
-		case <-timeout:
-			// handle timeout error
-		}
+	if err := r.EmitSync(&msg); err != nil {
+		log.Fatalln(err)
 	}
 }
 ```
 
-### Listen
+### Listen & serve for multiple consumers at same time
 ```go
+package main
+
 import (
 	"context"
-	"encoding/json"
+	"log"
+	"runtime"
 	"time"
 
 	"github.com/maxnilz/rabbus"
+	"github.com/sirupsen/logrus"
+)
+
+var (
+	rabbusDsn = "amqp://localhost:5672"
 )
 
 func main() {
-	timeout := time.After(time.Second * 3)
-	cbStateChangeFunc := func(name, from, to string) {
-		// do something when state is changed
-	}
 	r, err := rabbus.New(
 		rabbusDsn,
 		rabbus.Durable(true),
-		rabbus.Attempts(5),
-		rabbus.Sleep(time.Second*2),
-		rabbus.Threshold(3),
-		rabbus.OnStateChange(cbStateChangeFunc),
+		rabbus.WithLogger(logrus.StandardLogger()),
+		rabbus.ChannelPoolSize(runtime.NumCPU()*5),
 	)
 	if err != nil {
-		// handle error
+		log.Fatalf("Failed to init rabbus connection %s", err)
+		return
 	}
 
-	defer func(r Rabbus) {
+	defer func(r *rabbus.Rabbus) {
 		if err := r.Close(); err != nil {
-			// handle error
+			log.Fatalf("Failed to close rabbus connection %s", err)
 		}
 	}(r)
+
+	declareArgs := rabbus.NewDeclareArgs().WithMessageTTL(time.Second * 120)
+
+	r.HandleFunc(rabbus.ListenConfig{
+		Exchange:        "consumer_test_ex_01",
+		Kind:            rabbus.ExchangeDirect,
+		Key:             "consumer_test_key_01",
+		PassiveExchange: false,
+		Queue:           "consumer_test_q_01",
+		DeclareArgs:     declareArgs,
+		BindArgs:        nil,
+	}, func(ctx context.Context, message rabbus.ConsumerMessage) {
+		log.Println("Message on queue 01 was consumed")
+		message.Ack(false)
+	})
+
+	r.HandleFunc(rabbus.ListenConfig{
+		Exchange:        "consumer_test_ex_02",
+		Kind:            rabbus.ExchangeTopic,
+		Key:             "consumer_test_key_02",
+		PassiveExchange: false,
+		Queue:           "consumer_test_q_02",
+		DeclareArgs:     declareArgs,
+		BindArgs:        nil,
+	}, func(ctx context.Context, message rabbus.ConsumerMessage) {
+		log.Println("Message on queue 02 was consumed")
+		message.Ack(false)
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go r.Run(ctx)
-
-	messages, err := r.Listen(rabbus.ListenConfig{
-		Exchange:    "events_ex",
-		Kind:        "topic",
-		Key:         "events_key",
-		Queue:       "events_q",
-		DeclareArgs: rabbus.NewDeclareArgs().WithMessageTTL(15 * time.Minute).With("foo", "bar"),
-		BindArgs:    rabbus.NewBindArgs().With("baz", "qux"),
-	})
-	if err != nil {
-		// handle errors during adding listener
+	if err := r.ListenAndServe(ctx); err != nil {
+		log.Fatalln(err)
 	}
-	defer close(messages)
-
-	go func(messages chan ConsumerMessage) {
-		for m := range messages {
-			m.Ack(false)
-		}
-	}(messages)
 }
 ```
 

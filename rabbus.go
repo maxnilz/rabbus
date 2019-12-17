@@ -3,7 +3,7 @@ package rabbus
 import (
 	"context"
 	"errors"
-	"strings"
+	"log"
 	"sync"
 	"time"
 
@@ -85,6 +85,7 @@ type (
 	// Rabbus interpret (implement) Rabbus interface definition
 	Rabbus struct {
 		AMQP
+		Logger
 		mu         sync.RWMutex
 		m          map[string]muxEntry
 		breaker    *gobreaker.CircuitBreaker
@@ -127,6 +128,11 @@ type (
 		EmitSync(msg *Message) error
 	}
 
+	// Logger expose a log interface for the internal logs
+	Logger interface {
+		Error(args ...interface{})
+	}
+
 	config struct {
 		dsn               string
 		durable           bool
@@ -154,6 +160,8 @@ type (
 		prefetchCount, prefetchSize int
 		global                      bool
 	}
+
+	defaultLogger struct{}
 )
 
 func (lc ListenConfig) validate() error {
@@ -170,6 +178,10 @@ func (lc ListenConfig) validate() error {
 	}
 
 	return nil
+}
+
+func (l defaultLogger) Error(args ...interface{}) {
+	log.Println(args...)
 }
 
 // New returns a new Rabbus configured with the
@@ -199,6 +211,10 @@ func New(dsn string, options ...Option) (*Rabbus, error) {
 		r.AMQP = amqpWrapper
 	}
 
+	if r.Logger == nil {
+		r.Logger = defaultLogger{}
+	}
+
 	if err := r.WithQos(
 		r.config.qos.prefetchCount,
 		r.config.qos.prefetchSize,
@@ -209,6 +225,9 @@ func New(dsn string, options ...Option) (*Rabbus, error) {
 
 	r.config.dsn = dsn
 	r.breaker = gobreaker.NewCircuitBreaker(newBreakerSettings(r.config))
+
+	// Setup a background routine for the event of channel close & async emit.
+	go r.run()
 
 	return r, nil
 }
@@ -282,21 +301,22 @@ func (r *Rabbus) ListenAndServe(ctx context.Context) error {
 	}
 
 	var errs []error
-	for i := 0; i < len(r.m); i++ {
-		select {
-		case err := <-errchan:
+
+	wg := sync.WaitGroup{}
+	wg.Add(len(r.m))
+	go func() {
+		for err := range errchan {
 			if err != nil {
+				r.Error("rabbus:", err)
 				errs = append(errs, err)
 			}
+			wg.Done()
 		}
-	}
+	}()
+	wg.Wait()
 
 	if len(errs) != 0 {
-		var es []string
-		for _, err := range errs {
-			es = append(es, err.Error())
-		}
-		return errors.New(strings.Join(es, "\n"))
+		return errors.New("listen and serve failed, check rabbus logs for more details")
 	}
 
 	return nil
@@ -318,93 +338,6 @@ func (r *Rabbus) ServeConsumerMessage(ctx context.Context, q ListenConfig, messa
 		h = NotFoundHandler()
 	}
 	h.ServeConsumerMessage(ctx, message)
-}
-
-// Find a handler on a handler map given a queue.
-func (r *Rabbus) match(q ListenConfig) (h Handler, queue ListenConfig) {
-	// Check for exact match first.
-	v, ok := r.m[q.Queue]
-	if ok {
-		return v.h, v.c
-	}
-
-	return nil, q
-}
-
-func (r *Rabbus) handler(q ListenConfig) (h Handler, queue ListenConfig) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	return r.match(q)
-}
-
-func (r *Rabbus) listenAndServe(ctx context.Context, c ListenConfig) error {
-	if c.DeclareArgs == nil {
-		c.DeclareArgs = NewDeclareArgs()
-	}
-
-	if c.BindArgs == nil {
-		c.BindArgs = NewBindArgs()
-	}
-
-	msgs, err := r.CreateConsumer(c.Exchange, c.Key, c.Kind, c.Queue, r.config.durable, c.DeclareArgs.args, c.BindArgs.args)
-	if err != nil {
-		return err
-	}
-
-	r.mu.Lock()
-	r.conDeclared++ // increase the declared consumers counter
-	r.exDeclared[c.Exchange] = struct{}{}
-	r.mu.Unlock()
-
-	messages := make(chan ConsumerMessage, 256)
-	go r.wrapMessage(c, msgs, messages)
-	go r.listenReconnect(c, messages)
-
-	for {
-		select {
-		case m, ok := <-messages:
-			if !ok {
-				return nil
-			}
-			r.ServeConsumerMessage(ctx, c, m)
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-r.closed:
-			return nil
-		}
-	}
-}
-
-// Run starts rabbus channels for emitting and listening for amqp connection close
-// returns ctx error in case of any.
-func (r *Rabbus) Run(ctx context.Context) error {
-	notifyClose := r.NotifyClose(make(chan *amqp.Error))
-
-	for {
-		select {
-		case m, ok := <-r.emit:
-			if !ok {
-				return errors.New("unexpected close of emit channel")
-			}
-
-			r.produceAsync(m)
-
-		case err := <-notifyClose:
-			if err == nil {
-				// "… on a graceful close, no error will be sent."
-				return nil
-			}
-
-			r.handleAMQPClose(err)
-
-			// We have reconnected, so we need a new NotifyClose again.
-			notifyClose = r.NotifyClose(make(chan *amqp.Error))
-
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
 }
 
 // EmitAsync emits a message to RabbitMQ, but does not wait for the response from broker.
@@ -591,6 +524,89 @@ func (r *Rabbus) listenReconnect(c ListenConfig, messages chan ConsumerMessage) 
 		go r.wrapMessage(c, msgs, messages)
 		go r.listenReconnect(c, messages)
 		break
+	}
+}
+
+// Find a handler on a handler map given a queue.
+func (r *Rabbus) match(q ListenConfig) (h Handler, queue ListenConfig) {
+	// Check for exact match first.
+	v, ok := r.m[q.Queue]
+	if ok {
+		return v.h, v.c
+	}
+
+	return nil, q
+}
+
+func (r *Rabbus) handler(q ListenConfig) (h Handler, queue ListenConfig) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.match(q)
+}
+
+func (r *Rabbus) listenAndServe(ctx context.Context, c ListenConfig) error {
+	if c.DeclareArgs == nil {
+		c.DeclareArgs = NewDeclareArgs()
+	}
+
+	if c.BindArgs == nil {
+		c.BindArgs = NewBindArgs()
+	}
+
+	msgs, err := r.CreateConsumer(c.Exchange, c.Key, c.Kind, c.Queue, r.config.durable, c.DeclareArgs.args, c.BindArgs.args)
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	r.conDeclared++ // increase the declared consumers counter
+	r.exDeclared[c.Exchange] = struct{}{}
+	r.mu.Unlock()
+
+	messages := make(chan ConsumerMessage, 256)
+	go r.wrapMessage(c, msgs, messages)
+	go r.listenReconnect(c, messages)
+
+	for {
+		select {
+		case m, ok := <-messages:
+			if !ok {
+				return nil
+			}
+			r.ServeConsumerMessage(ctx, c, m)
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.closed:
+			return nil
+		}
+	}
+}
+
+// run starts rabbus channels for emitting and listening for amqp connection close
+func (r *Rabbus) run() {
+	notifyClose := r.NotifyClose(make(chan *amqp.Error))
+
+	for {
+		select {
+		case m, ok := <-r.emit:
+			if !ok {
+				return
+			}
+
+			r.produceAsync(m)
+
+		case err := <-notifyClose:
+			if err == nil {
+				// "… on a graceful close, no error will be sent."
+				return
+			}
+
+			r.handleAMQPClose(err)
+
+			// We have reconnected, so we need a new NotifyClose again.
+			notifyClose = r.NotifyClose(make(chan *amqp.Error))
+		}
 	}
 }
 
