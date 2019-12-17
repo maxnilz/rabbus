@@ -1,8 +1,8 @@
 ## Rabbus 🚌 ✨
 
 * A tiny wrapper over [amqp](https://github.com/streadway/amqp) exchanges and queues.
-* Support listen & serve multiple consumer at same via register handler function.
-* Support produce message in both sync & async way mode.
+* Support listen & serve multiple consumers at same via register handler function.
+* Support produce message in both sync & async mode.
 * In memory retries with exponential backoff for sending messages for async producing mode.
 * Protect async producer calls with [circuit breaker](https://github.com/sony/gobreaker) for async producing mode.
 * Automatic reconnect to RabbitMQ broker when connection is lost.
