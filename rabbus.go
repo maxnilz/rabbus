@@ -316,7 +316,7 @@ func (r *Rabbus) ListenAndServe(ctx context.Context) error {
 	wg.Wait()
 
 	if len(errs) != 0 {
-		return errors.New("listen and serve failed, check rabbus logs for more details")
+		return errors.New("rabbus:listen and serve failed, check rabbus logs for more details")
 	}
 
 	return nil
