@@ -33,6 +33,10 @@ const (
 	contentEncoding = "UTF-8"
 )
 
+var (
+	loggerCtx = struct{}{}
+)
+
 type (
 	// OnStateChangeFunc is the callback function when circuit breaker state changes.
 	OnStateChangeFunc func(name, from, to string)
@@ -323,8 +327,9 @@ func (r *Rabbus) ListenAndServe(ctx context.Context) error {
 }
 
 // NotFound record an error for the not founded handler.
-func NotFound(_ context.Context, message ConsumerMessage) {
-	// TODO record an error for the not founded handler
+func NotFound(ctx context.Context, message ConsumerMessage) {
+	logger := ctx.Value(loggerCtx).(Logger)
+	logger.Error("rabbus: got unhandled message: ", message.Exchange, message.Key)
 }
 
 // NotFoundHandler returns a simple not found handler.
@@ -337,6 +342,7 @@ func (r *Rabbus) ServeConsumerMessage(ctx context.Context, q ListenConfig, messa
 	if h == nil {
 		h = NotFoundHandler()
 	}
+	ctx = context.WithValue(ctx, loggerCtx, r.Logger)
 	h.ServeConsumerMessage(ctx, message)
 }
 
